@@ -67,16 +67,37 @@ npm run preview
 └── src/
     ├── main.jsx          # React 挂载入口
     ├── App.jsx           # 主界面 (导航树 + 元数据栏 + 多标签阅读器)
-    ├── mockData.js       # 模拟数据 (生产环境由 Golang 后端 API 替换)
+    ├── api.js            # 后端 API 客户端 (fetchTree / fetchService)
+    ├── mockData.js       # 离线回退数据 (后端不可达时使用)
+    ├── monacoSetup.js    # 本地自托管 Monaco (无需 CDN)
     └── index.css         # Tailwind 指令 + 全局样式
 ```
 
 ## 对接后端 (Wiring to the Backend)
 
-当前 `src/mockData.js` 是占位数据。生产环境将其替换为一次后端 API 拉取即可，
-数据结构保持一致：
+前端已接入 Golang 后端（见 `backend/`）：
 
-```js
-// services[] / templates[] / yamlContent{ source, merged, manifest }
-const data = await fetch('/api/config/service-a').then((r) => r.json());
+- 启动时 `GET /api/tree` 渲染侧边栏；
+- 切换服务时 `GET /api/services/{id}`，把 `content[activeTab]`
+  (`source` / `merged` / `manifest`) 交给 Monaco。
+
+**开发模式**：`vite.config.js` 已配置代理，把 `/api` 转发到
+`http://localhost:8080`（可用 `VITE_PROXY_TARGET` 覆盖），因此浏览器发的是
+同源请求、无需处理 CORS。两个服务分别启动：
+
+```bash
+# 终端 1 — 后端 (示例数据)
+cd backend && GITOPS_REPO_DIR=./testdata/repo GITOPS_REFRESH_INTERVAL=0 go run ./cmd/server
+
+# 终端 2 — 前端
+npm run dev        # http://localhost:5173
 ```
+
+**生产/其它地址**：用 `VITE_API_BASE` 指定后端绝对地址（此时依赖后端的 CORS 配置）：
+
+```bash
+VITE_API_BASE=https://gitops-api.internal npm run build
+```
+
+**离线回退**：当后端不可达时，前端自动回退到 `src/mockData.js` 的内置示例数据，
+并在顶部显示提示条 —— 保证 `npm run dev` 单独也能跑起来看 UI。

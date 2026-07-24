@@ -22,3 +22,19 @@ export const MOCK_DATA = {
     manifest: `---\n# 渲染结果预览 (Source: standard-web-chart/templates/deployment.yaml)\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: service-a\n  labels:\n    app: service-a\n    environment: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: service-a\n  template:\n    metadata:\n      labels:\n        app: service-a\n    spec:\n      containers:\n        - name: service-a\n          image: "my-registry/service-a:v2.0.1"\n          ports:\n            - containerPort: 8080\n          resources:\n            requests:\n              cpu: 100m\n              memory: 128Mi\n            limits:\n              cpu: 500m\n              memory: 512Mi`,
   },
 };
+
+// ==========================================
+// 离线回退适配器 (Offline fallback adapters)
+// ==========================================
+// These mirror the backend's response shape so the UI degrades gracefully to
+// bundled sample data when the API is unreachable (e.g. `npm run dev` with no
+// backend running). In this mode every service shares the same yamlContent.
+
+export function mockTree() {
+  return { services: MOCK_DATA.services, templates: MOCK_DATA.templates };
+}
+
+export function mockServiceDetail(id) {
+  const meta = MOCK_DATA.services.find((s) => s.id === id) ?? MOCK_DATA.services[0];
+  return { ...meta, content: MOCK_DATA.yamlContent };
+}
