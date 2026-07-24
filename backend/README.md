@@ -179,6 +179,22 @@ go install github.com/yannh/kubeconform/cmd/kubeconform@latest
 bash hack/validate-crs.sh            # 层 2：对照真实 Flink CRD schema
 ```
 
+## 本地真集群冒烟测试 (无需 Docker / 镜像仓库)
+
+想真正验证 “点 Run → FlinkDeployment 被创建到集群”，但环境里没有 Docker 或镜像仓库被
+出口策略拦住时，用 **envtest**（`setup-envtest` 下载的 `kube-apiserver` + `etcd` 二进制，
+非容器镜像）起一个真的控制面：
+
+```bash
+bash hack/local-apiserver-test.sh
+```
+
+脚本会：起控制面 → 装真实 FlinkDeployment CRD → 后端指向它 → 对每个服务先 dryRun 再
+apply → 打印 apiserver 实际持久化的对象及其 field manager（`gitops-dashboard`，证明走的是
+Server-Side Apply）。注意这是控制面-only（无 kubelet/节点），验证的是**下发写路径**；
+Flink Operator 真正拉起 Pod 需要有节点的完整集群。`hack/localcluster/` 是它用到的
+控制面小程序（独立 module，不污染后端依赖）。
+
 ## 测试 / 构建
 
 ```bash
