@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
-import { Search, FileText, Folder, CheckCircle2, GitCommit, Loader2, WifiOff } from 'lucide-react';
-import { fetchTree, fetchService } from './api';
+import {
+  Search, FileText, Folder, CheckCircle2, GitCommit, Loader2, WifiOff,
+  Play, XCircle,
+} from 'lucide-react';
+import { fetchTree, fetchService, deployService } from './api';
 
 const TABS = [
   { id: 'source', label: '原始配置 (Source)' },
@@ -20,6 +23,8 @@ export default function App() {
   // offline === true means the backend was unreachable and we're rendering the
   // bundled sample data instead.
   const [offline, setOffline] = useState(false);
+  // deploy: { status: 'idle'|'running'|'ok'|'error', msg }
+  const [deploy, setDeploy] = useState({ status: 'idle', msg: '' });
 
   // Load the sidebar tree once on mount; fall back to mock data on failure.
   useEffect(() => {
@@ -50,6 +55,7 @@ export default function App() {
     let cancelled = false;
     setDetailLoading(true);
     setDetailError(null);
+    setDeploy({ status: 'idle', msg: '' });
     (async () => {
       try {
         const d = offline
@@ -83,6 +89,23 @@ export default function App() {
   );
 
   const editorValue = detail?.content?.[activeTab] ?? '';
+
+  // Deploy: Server-Side Apply the rendered FlinkDeployment CR to the cluster.
+  // Fires immediately on click (no confirmation, per the chosen behavior).
+  async function handleDeploy() {
+    if (!activeId || deploy.status === 'running') return;
+    setDeploy({ status: 'running', msg: '' });
+    try {
+      const res = await deployService(activeId);
+      const applied = res.applied?.[0];
+      const where = applied ? `${applied.kind}/${applied.name} → ns:${applied.namespace}` : '已应用';
+      setDeploy({ status: 'ok', msg: where });
+    } catch (e) {
+      setDeploy({ status: 'error', msg: e.message || '部署失败' });
+    }
+  }
+
+  const canDeploy = !offline && !!activeId;
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#1e1e1e] text-gray-300 font-sans selection:bg-blue-900 overflow-hidden">
@@ -171,6 +194,38 @@ export default function App() {
                 {detailLoading && (
                   <Loader2 className="w-4 h-4 text-gray-500 animate-spin" />
                 )}
+              </div>
+
+              {/* Deploy (Run) — the one write action: apply the FlinkDeployment CR. */}
+              <div className="flex items-center gap-3">
+                {deploy.status === 'ok' && (
+                  <span className="flex items-center text-xs text-green-400 max-w-md truncate">
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+                    已部署: <span className="font-mono ml-1 truncate">{deploy.msg}</span>
+                  </span>
+                )}
+                {deploy.status === 'error' && (
+                  <span className="flex items-center text-xs text-red-400 max-w-md truncate" title={deploy.msg}>
+                    <XCircle className="w-3.5 h-3.5 mr-1.5 shrink-0" />
+                    <span className="truncate">{deploy.msg}</span>
+                  </span>
+                )}
+                <button
+                  onClick={handleDeploy}
+                  disabled={!canDeploy || deploy.status === 'running'}
+                  title={offline ? '后端未连接，无法部署' : '部署 FlinkDeployment 到集群'}
+                  className={`flex items-center gap-1.5 text-sm px-3.5 py-1.5 rounded-md font-medium transition-colors ${
+                    canDeploy && deploy.status !== 'running'
+                      ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                      : 'bg-[#2d2d2d] text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  {deploy.status === 'running' ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> 部署中...</>
+                  ) : (
+                    <><Play className="w-4 h-4" fill="currentColor" /> Run / 部署</>
+                  )}
+                </button>
               </div>
             </div>
 

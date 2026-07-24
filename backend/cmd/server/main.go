@@ -12,6 +12,8 @@
 //	GITOPS_LISTEN            listen address (default ":8080")
 //	GITOPS_REFRESH_INTERVAL  periodic re-sync as a Go duration (default "5m"; "0" disables)
 //	GITOPS_CORS_ORIGIN       CORS origin to allow (default "http://localhost:5173")
+//	GITOPS_KUBECONFIG        kubeconfig path for deploys; empty => in-cluster then default kubeconfig
+//	GITOPS_DEPLOY_NAMESPACE  namespace to apply FlinkDeployments into (default "default")
 package main
 
 import (
@@ -26,6 +28,7 @@ import (
 	"time"
 
 	"github.com/xiaobaowan1988/raftlog-replay-system/backend/internal/api"
+	"github.com/xiaobaowan1988/raftlog-replay-system/backend/internal/deploy"
 	"github.com/xiaobaowan1988/raftlog-replay-system/backend/internal/gitrepo"
 	"github.com/xiaobaowan1988/raftlog-replay-system/backend/internal/store"
 )
@@ -51,6 +54,18 @@ func main() {
 	cancel()
 	log.Info("initial snapshot built", "services", len(st.Tree().Services))
 
+	// Best-effort cluster applier for the deploy write path. If no kubeconfig /
+	// in-cluster config is reachable, the server still serves the read API and
+	// the deploy endpoint reports itself unconfigured (503).
+	var opts api.Options
+	opts.DeployNamespace = cfg.deployNamespace
+	if applier, err := deploy.New(cfg.kubeconfig, "gitops-dashboard"); err != nil {
+		log.Warn("deploy disabled: no reachable cluster config", "err", err)
+	} else {
+		opts.Applier = applier
+		log.Info("deploy enabled", "namespace", cfg.deployNamespace)
+	}
+
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -60,7 +75,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           api.New(st, cfg.webhookSecret, cfg.corsOrigin, log).Handler(),
+		Handler:           api.New(st, cfg.webhookSecret, cfg.corsOrigin, opts, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -99,24 +114,28 @@ func periodicRefresh(ctx context.Context, st *store.Store, every time.Duration, 
 }
 
 type config struct {
-	repoURL       string
-	branch        string
-	repoDir       string
-	webhookSecret string
-	listen        string
-	refresh       time.Duration
-	corsOrigin    string
+	repoURL         string
+	branch          string
+	repoDir         string
+	webhookSecret   string
+	listen          string
+	refresh         time.Duration
+	corsOrigin      string
+	kubeconfig      string
+	deployNamespace string
 }
 
 func loadConfig() config {
 	c := config{
-		repoURL:       os.Getenv("GITOPS_REPO_URL"),
-		branch:        envOr("GITOPS_REPO_BRANCH", "main"),
-		repoDir:       envOr("GITOPS_REPO_DIR", "./data/repo"),
-		webhookSecret: os.Getenv("GITOPS_WEBHOOK_SECRET"),
-		listen:        envOr("GITOPS_LISTEN", ":8080"),
-		corsOrigin:    envOr("GITOPS_CORS_ORIGIN", "http://localhost:5173"),
-		refresh:       5 * time.Minute,
+		repoURL:         os.Getenv("GITOPS_REPO_URL"),
+		branch:          envOr("GITOPS_REPO_BRANCH", "main"),
+		repoDir:         envOr("GITOPS_REPO_DIR", "./data/repo"),
+		webhookSecret:   os.Getenv("GITOPS_WEBHOOK_SECRET"),
+		listen:          envOr("GITOPS_LISTEN", ":8080"),
+		corsOrigin:      envOr("GITOPS_CORS_ORIGIN", "http://localhost:5173"),
+		kubeconfig:      os.Getenv("GITOPS_KUBECONFIG"),
+		deployNamespace: envOr("GITOPS_DEPLOY_NAMESPACE", "default"),
+		refresh:         5 * time.Minute,
 	}
 	if v := strings.TrimSpace(os.Getenv("GITOPS_REFRESH_INTERVAL")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

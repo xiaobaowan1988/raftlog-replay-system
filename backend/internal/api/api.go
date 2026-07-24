@@ -1,15 +1,17 @@
-// Package api exposes the read-only HTTP surface consumed by the React app,
-// plus the GitLab webhook that triggers a re-sync.
+// Package api exposes the mostly-read-only HTTP surface consumed by the React
+// app, the GitLab webhook that triggers a re-sync, and the one write path:
+// deploying a rendered FlinkDeployment CR to the cluster.
 //
 // Routes:
 //
 //	GET  /api/healthz              liveness probe
 //	GET  /api/tree                 sidebar: { services[], templates[] }
 //	GET  /api/services/{id}        one service: metadata + { source, merged, manifest }
+//	POST /api/services/{id}/deploy Server-Side Apply the rendered CR (?dryRun=true supported)
 //	POST /api/webhook/gitlab       re-sync trigger (validates X-Gitlab-Token)
 //
-// Every non-webhook route is a pure read of the current in-memory snapshot, in
-// keeping with the Zero-Write principle: this server never mutates repo state.
+// All GET routes are pure reads of the current in-memory snapshot. The deploy
+// route is the sole mutation and only touches the cluster, never the repo.
 package api
 
 import (
@@ -19,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/xiaobaowan1988/raftlog-replay-system/backend/internal/deploy"
 	"github.com/xiaobaowan1988/raftlog-replay-system/backend/internal/store"
 )
 
@@ -27,21 +30,37 @@ type Rebuilder interface {
 	Rebuild(ctx context.Context) error
 }
 
-// Server wires the store, webhook secret and CORS origin into an http.Handler.
+// Server wires the store, webhook secret, CORS origin and (optional) cluster
+// applier into an http.Handler.
 type Server struct {
 	store         *store.Store
 	webhookSecret string
 	allowOrigin   string
+	applier       *deploy.Applier // nil when the cluster is not configured
+	deployNS      string
 	log           *slog.Logger
 }
 
+// Options configures the deploy write path.
+type Options struct {
+	Applier         *deploy.Applier // nil => deploy endpoint returns 503
+	DeployNamespace string          // target namespace when a CR omits one
+}
+
 // New builds the Server. allowOrigin is the CORS origin to allow (e.g.
-// "http://localhost:5173"); empty disables CORS headers.
-func New(st *store.Store, webhookSecret, allowOrigin string, log *slog.Logger) *Server {
+// "http://localhost:5173"); empty disables CORS headers. opts may be zero.
+func New(st *store.Store, webhookSecret, allowOrigin string, opts Options, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: st, webhookSecret: webhookSecret, allowOrigin: allowOrigin, log: log}
+	ns := opts.DeployNamespace
+	if ns == "" {
+		ns = "default"
+	}
+	return &Server{
+		store: st, webhookSecret: webhookSecret, allowOrigin: allowOrigin,
+		applier: opts.Applier, deployNS: ns, log: log,
+	}
 }
 
 // Handler returns the fully-routed http.Handler.
@@ -50,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/tree", s.handleTree)
 	mux.HandleFunc("GET /api/services/{id}", s.handleService)
+	mux.HandleFunc("POST /api/services/{id}/deploy", s.handleDeploy)
 	mux.HandleFunc("POST /api/webhook/gitlab", s.handleWebhook)
 	return s.withCORS(mux)
 }
@@ -70,6 +90,43 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// handleDeploy Server-Side-Applies the service's rendered FlinkDeployment CR to
+// the cluster. ?dryRun=true asks the apiserver to validate/admit without
+// persisting. Returns 503 when no cluster is configured.
+func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
+	if s.applier == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "deploy is not configured: no reachable kubeconfig / in-cluster config on the backend",
+		})
+		return
+	}
+
+	id := r.PathValue("id")
+	detail, ok := s.store.Service(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "service not found: " + id})
+		return
+	}
+
+	dryRun := r.URL.Query().Get("dryRun") == "true"
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	results, err := s.applier.Apply(ctx, s.deployNS, detail.Content.Manifest, dryRun)
+	if err != nil {
+		s.log.Warn("deploy failed", "service", id, "dryRun", dryRun, "err", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	s.log.Info("deployed", "service", id, "dryRun", dryRun, "objects", len(results))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "applied",
+		"dryRun":  dryRun,
+		"applied": results,
+	})
 }
 
 // handleWebhook validates the GitLab secret token and triggers a rebuild.

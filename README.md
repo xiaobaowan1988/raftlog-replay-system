@@ -8,9 +8,14 @@ GitLab（人工或 Code Agent 提交），因此本前端页面的核心目标�
 
 ## 核心设计原则 (Design Principles)
 
-- **绝对只读 (Zero-Write)：** 彻底剥离修改能力，前端不提供任何 "保存"、"提交" 或表单输入框。Monaco Editor 强制 `readOnly: true`。
+- **配置只读 (Read-Only Config)：** 配置的唯一修改入口是 GitLab；前端不提供任何编辑/保存表单，Monaco Editor 强制 `readOnly: true`。
 - **真相统一 (Single Source of Truth)：** 页面展示的数据 100% 反映远端 Git 仓库及后端内存的当前状态。
 - **开发体验 (Developer Experience)：** 采用类似 VS Code 的沉浸式代码阅读体验 (`vs-dark`)，降低 YAML 阅读疲劳。
+
+> **关于 “Run / 部署”：** 头部的 Run 按钮是一个显式的**下发动作**，把当前服务渲染出的
+> FlinkDeployment CR 通过后端 Server-Side Apply 到 K8s 集群。它**不修改 Git 配置**
+> （配置仍只在 GitLab 改），只把已合并的期望状态下发到集群 —— 属于“只读配置 + 显式部署”，
+> 而非早期纯浏览版的绝对 Zero-Write。详见 `backend/README.md`。
 
 ## 系统交互链路 (Architecture Flow)
 

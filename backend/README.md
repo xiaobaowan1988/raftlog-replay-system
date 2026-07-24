@@ -68,6 +68,7 @@ Deep Merge 后生效的完整 spec；**Manifest** = 最终下发给 Operator 的
 | `GET`  | `/api/healthz` | 存活探针 |
 | `GET`  | `/api/tree` | 侧边栏：`{ services[], templates[] }` |
 | `GET`  | `/api/services/{id}` | 单个服务：元数据 + `{ source, merged, manifest }` |
+| `POST` | `/api/services/{id}/deploy` | **写路径**：把渲染出的 FlinkDeployment CR 用 SSA 下发到集群（`?dryRun=true` 只校验/准入不落库） |
 | `POST` | `/api/webhook/gitlab` | 触发重新同步（校验 `X-Gitlab-Token`） |
 
 `GET /api/services/{id}` 返回结构（与前端 `Content` 完全对齐）：
@@ -98,6 +99,8 @@ Deep Merge 后生效的完整 spec；**Manifest** = 最终下发给 Operator 的
 | `GITOPS_LISTEN` | `:8080` | 监听地址 |
 | `GITOPS_REFRESH_INTERVAL` | `5m` | 兜底定时同步；`0` 关闭 |
 | `GITOPS_CORS_ORIGIN` | `http://localhost:5173` | 允许的前端来源 |
+| `GITOPS_KUBECONFIG` | *(空)* | 部署用 kubeconfig 路径；留空则先试 in-cluster、再回退默认 kubeconfig |
+| `GITOPS_DEPLOY_NAMESPACE` | `default` | FlinkDeployment 下发到的命名空间 |
 
 ## 本地运行
 
@@ -135,30 +138,60 @@ go run ./cmd/server
 
 后端收到后立即返回 `202 Accepted`，在后台执行 `git fetch + reset + 重建快照`。
 
+## 部署 (Run) — 唯一的写路径
+
+前端点 **Run / 部署** → `POST /api/services/{id}/deploy`。后端取该服务当前渲染出的
+FlinkDeployment CR，用 **client-go 动态客户端 + Server-Side Apply** 下发到集群：
+
+- field manager 固定为 `gitops-dashboard`，重复 apply 幂等、冲突可归因；
+- 命名空间取 CR 自身 `metadata.namespace`，缺省则用 `GITOPS_DEPLOY_NAMESPACE`；
+- 下发前先跑 `deploy.Validate`（结构 + FlinkDeployment 必填字段校验）；
+- `?dryRun=true` 让 apiserver 只校验/准入、不落库。
+
+集群凭证按 client-go 惯例解析：先 in-cluster，再 `GITOPS_KUBECONFIG` / `$KUBECONFIG`
+/ `~/.kube/config`。**若都不可达，后端照常提供只读 API，deploy 端点返回 `503` 并说明未配置**
+（读服务不受影响）。
+
+```bash
+# 指向你的集群后启用部署
+GITOPS_REPO_DIR=./testdata/repo \
+GITOPS_KUBECONFIG=$HOME/.kube/config \
+GITOPS_DEPLOY_NAMESPACE=flink \
+go run ./cmd/server
+
+curl -s -X POST localhost:8080/api/services/fraud-detection/deploy | jq         # 真实 apply
+curl -s -X POST "localhost:8080/api/services/fraud-detection/deploy?dryRun=true" # 仅校验/准入
+```
+
+## CR 校验 (无需真集群)
+
+两层校验保证 “Run 会下发的东西” 是合法可部署的 FlinkDeployment：
+
+1. **内置 Go 校验器**（`internal/deploy`）：渲染每个服务并断言 GVK、`metadata.name`、
+   `spec` 及 Flink 必填字段（image / flinkVersion / jobManager|taskManager.resource /
+   application 模式的 job.jarURI）。随 `go test` 运行，不依赖集群。
+2. **对照真实 CRD schema**（`hack/validate-crs.sh`）：拉取 Apache Flink Kubernetes
+   Operator 的 FlinkDeployment CRD，转成 JSON schema，用 `kubeconform` 校验渲染结果。
+
+```bash
+go test ./internal/deploy/           # 层 1：内置校验器
+go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+bash hack/validate-crs.sh            # 层 2：对照真实 Flink CRD schema
+```
+
 ## 测试 / 构建
 
 ```bash
-go test ./...        # 含 Deep Merge 单元测试
+go test ./...        # Deep Merge 单测 + FlinkDeployment CR 校验
 go vet ./...
 go build -o bin/server ./cmd/server
 ```
 
 ## 前端对接
 
-前端当前使用 `src/mockData.js` 占位。对接本后端时，把数据来源换成两次请求即可，
-结构无需改动：
-
-```js
-// src/api.js
-const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080';
-
-export const fetchTree = () =>
-  fetch(`${BASE}/api/tree`).then((r) => r.json());
-
-export const fetchService = (id) =>
-  fetch(`${BASE}/api/services/${id}`).then((r) => r.json());
-// -> { ...meta, content: { source, merged, manifest } }
-```
+前端（仓库根目录）已接入本后端 —— 见根 `README.md` 的“对接后端”。核心 3 个调用在
+`src/api.js`：`fetchTree()`、`fetchService(id)`、`deployService(id, { dryRun })`。
+开发模式下 Vite 代理把 `/api` 转发到 `localhost:8080`，浏览器发同源请求、无需 CORS。
 
 App 中：进入时 `fetchTree()` 渲染侧边栏；切换服务时 `fetchService(id)`，
 把 `detail.content[activeTab]` 交给 Monaco。这样每个服务/每个 tab 都会展示各自的真实内容
