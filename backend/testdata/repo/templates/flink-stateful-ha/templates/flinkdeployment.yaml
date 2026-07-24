@@ -1,0 +1,13 @@
+# 渲染结果预览 (FlinkDeployment CR — applied to the Flink Kubernetes Operator)
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: {{ .Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/managed-by: gitops
+    environment: {{ .Env }}
+  annotations:
+    flink.apache.org/profile: stateful-ha
+spec:
+{{ toYaml .Values | indent 2 }}

@@ -37,13 +37,29 @@ backend/
 │   ├── model/                  # 与前端对齐的 JSON 结构体
 │   ├── gitrepo/                # git clone/pull + 单文件 commit 查询 (shell out)
 │   ├── merge/                  # Deep Merge (含单元测试)
-│   ├── render/                 # text/template 渲染 K8s manifests
+│   ├── render/                 # text/template 渲染 CR (含 toYaml/indent 助手)
 │   ├── store/                  # 内存快照：扫描/合并/渲染/原子替换
 │   └── api/                    # HTTP 路由 + GitLab webhook + CORS
 └── testdata/repo/              # 示例 GitOps 仓库 (本地开发用)
     ├── services/*.yaml
     └── templates/<name>/{values.yaml, templates/*.yaml}
 ```
+
+## 领域模型 (Flink Kubernetes Operator)
+
+本示例围绕 **Flink Kubernetes Operator** 建模：
+
+- **template = FlinkDeployment CR 模板**：`templates/<name>/` 下的 `values.yaml`
+  是该模板的默认 `spec`，`templates/flinkdeployment.yaml` 是 CR 骨架
+  (`apiVersion: flink.apache.org/v1beta1`, `kind: FlinkDeployment`)。
+- **service = 具体的 FlinkDeployment**：`services/<name>.yaml` 引用某个模板，
+  只写需要覆盖的 `spec` 字段（镜像、并行度、TM 资源、flinkConfiguration 等）。
+
+三个视图对应：**Source** = 提交到 Git 的服务覆盖文件；**Merged** = 与模板默认值
+Deep Merge 后生效的完整 spec；**Manifest** = 最终下发给 Operator 的 FlinkDeployment CR。
+
+渲染骨架用 Helm 风格的 `toYaml` / `indent` 助手把合并后的 spec 原样嵌入 CR，
+从而天然支持 `flinkConfiguration` 这类自由格式的 map。
 
 ## HTTP API
 
@@ -58,15 +74,15 @@ backend/
 
 ```json
 {
-  "id": "service-a",
-  "name": "service-a.yaml",
-  "template": "standard-web-chart",
+  "id": "fraud-detection",
+  "name": "fraud-detection.yaml",
+  "template": "flink-stateful-ha",
   "commit": "8f3a2b1",
   "time": "10 minutes ago",
   "content": {
-    "source":   "name: service-a\n...",
-    "merged":   "# Auto-merged ...\nname: service-a\n...",
-    "manifest": "apiVersion: apps/v1\nkind: Deployment\n..."
+    "source":   "name: fraud-detection\n...",
+    "merged":   "# Auto-merged ...\nname: fraud-detection\n...",
+    "manifest": "apiVersion: flink.apache.org/v1beta1\nkind: FlinkDeployment\n..."
   }
 }
 ```
@@ -93,7 +109,7 @@ GITOPS_REPO_DIR=./testdata/repo GITOPS_REFRESH_INTERVAL=0 go run ./cmd/server
 
 # 另开终端
 curl -s localhost:8080/api/tree | jq
-curl -s localhost:8080/api/services/service-a | jq -r .content.merged
+curl -s localhost:8080/api/services/fraud-detection | jq -r .content.manifest
 ```
 
 对接真实 GitLab 仓库：

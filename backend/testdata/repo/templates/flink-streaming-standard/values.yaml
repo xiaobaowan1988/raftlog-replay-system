@@ -1,0 +1,26 @@
+# Default spec values for the "flink-streaming-standard" template.
+#
+# This template represents a standard application-mode FlinkDeployment CR.
+# Concrete services referencing it inherit everything below and override only
+# what they need (see the Deep Merge in internal/merge).
+image: "flink:1.18"
+flinkVersion: v1_18
+serviceAccount: flink
+flinkConfiguration:
+  taskmanager.numberOfTaskSlots: "2"
+  state.backend: hashmap
+  execution.checkpointing.interval: "60000"
+  execution.checkpointing.mode: EXACTLY_ONCE
+jobManager:
+  replicas: 1
+  resource:
+    cpu: 1
+    memory: "2048m"
+taskManager:
+  resource:
+    cpu: 1
+    memory: "2048m"
+job:
+  parallelism: 2
+  upgradeMode: stateless
+  state: running

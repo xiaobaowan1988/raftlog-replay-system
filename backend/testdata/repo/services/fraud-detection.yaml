@@ -1,0 +1,17 @@
+name: fraud-detection
+env: production
+template_ref:
+  path: "templates/flink-stateful-ha"
+values:
+  image: "my-registry/flink-jobs/fraud-detection:2.3.0"
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "6"
+    execution.checkpointing.interval: "15000"
+  job:
+    jarURI: "local:///opt/flink/usrlib/fraud-detection.jar"
+    entryClass: "com.example.FraudDetectionJob"
+    parallelism: 12
+  taskManager:
+    resource:
+      cpu: 4
+      memory: "16384m"

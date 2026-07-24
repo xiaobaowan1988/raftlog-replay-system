@@ -1,0 +1,31 @@
+# Default spec values for the "flink-stateful-ha" template.
+#
+# A heavier profile for large stateful streaming jobs: RocksDB incremental
+# state, Kubernetes HA, S3 checkpoint/savepoint storage, and savepoint-based
+# upgrades. Represented as an application-mode FlinkDeployment CR.
+image: "flink:1.18"
+flinkVersion: v1_18
+serviceAccount: flink
+flinkConfiguration:
+  taskmanager.numberOfTaskSlots: "4"
+  state.backend: rocksdb
+  state.backend.incremental: "true"
+  execution.checkpointing.interval: "30000"
+  execution.checkpointing.mode: EXACTLY_ONCE
+  state.checkpoints.dir: "s3://flink-checkpoints/"
+  state.savepoints.dir: "s3://flink-savepoints/"
+  high-availability.type: kubernetes
+  high-availability.storageDir: "s3://flink-ha/"
+jobManager:
+  replicas: 2
+  resource:
+    cpu: 2
+    memory: "4096m"
+taskManager:
+  resource:
+    cpu: 2
+    memory: "8192m"
+job:
+  parallelism: 8
+  upgradeMode: savepoint
+  state: running

@@ -1,0 +1,11 @@
+name: session-metrics
+env: staging
+template_ref:
+  path: "templates/flink-streaming-standard"
+values:
+  image: "my-registry/flink-jobs/session-metrics:0.9.1"
+  job:
+    jarURI: "local:///opt/flink/usrlib/session-metrics.jar"
+    entryClass: "com.example.SessionMetricsJob"
+    parallelism: 3
+    upgradeMode: last-state

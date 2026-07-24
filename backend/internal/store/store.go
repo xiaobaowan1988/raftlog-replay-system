@@ -7,6 +7,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -214,12 +215,15 @@ func marshalMerged(svc serviceFile, merged map[string]any, templateID string) (s
 	}{Name: svc.Name, Env: svc.Env, Values: merged}
 	doc.TemplateRef.Path = svc.TemplateRef.Path
 
-	out, err := yaml.Marshal(doc)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
 		return "", err
 	}
+	_ = enc.Close()
 	header := fmt.Sprintf("# Auto-merged with defaults from template [%s]\n", templateID)
-	return header + string(out), nil
+	return header + buf.String(), nil
 }
 
 // Tree returns the current sidebar payload.
