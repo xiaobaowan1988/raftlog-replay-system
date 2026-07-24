@@ -1,0 +1,6 @@
+# Synced Git working copy (runtime data)
+/data/
+
+# Built binary
+/server
+/bin/

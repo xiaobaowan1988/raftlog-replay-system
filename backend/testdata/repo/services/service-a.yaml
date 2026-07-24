@@ -1,0 +1,9 @@
+name: service-a
+env: production
+template_ref:
+  path: "templates/standard-web-chart"
+values:
+  replicaCount: 3
+  image:
+    repository: "my-registry/service-a"
+    tag: "v2.0.1"

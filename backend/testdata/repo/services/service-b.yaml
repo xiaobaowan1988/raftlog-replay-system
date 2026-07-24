@@ -1,0 +1,10 @@
+name: service-b
+env: production
+template_ref:
+  path: "templates/python-worker"
+values:
+  replicaCount: 2
+  image:
+    repository: "my-registry/service-b"
+    tag: "v1.4.0"
+  queue: "orders"
