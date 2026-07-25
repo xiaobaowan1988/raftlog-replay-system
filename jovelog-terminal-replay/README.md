@@ -63,6 +63,32 @@ Three things proven at once:
   (the shuffled hash differs), so this invariance is meaningful: per-shard seq order is
   preserved even under parallel execution, because a shard is atomic to one subtask.
 
+## Where does the initial state come from? (`run-two-stage.sh`)
+
+The initial state is **not** computed at replay time — it's a **prior consumption's
+persisted checkpoint**: per-shard `(cursor, state)` = keyed state + per-shard seq
+offset (exactly what a Flink checkpoint/savepoint holds).
+
+- **Stage 1 — `Materializer`**: folds the `.bin` from genesis (seq 1) up to a cut and
+  persists per-shard `(cursor, fingerprint)`. *This is the initial state, produced.*
+- **Stage 2 — `RaftlogTerminalJob`**: resumes from that checkpoint, folds only
+  `seq > cursor` → terminal.
+
+```
+STAGE 1 cut {5:8,42:5,109:12}   -> checkpoint  5,8,-3250815405651330967  42,5,…  109,12,…
+STAGE 2 from checkpoint         -> sha=102de9c8bdf50bf2   (== from-seq-1 reference)
+
+STAGE 1 cut {5:15,42:18,109:3}  -> a DIFFERENT checkpoint
+STAGE 2 from checkpoint         -> sha=102de9c8bdf50bf2   (same terminal — cut is arbitrary)
+```
+
+So: the snapshot is just a **persisted fold-so-far tagged with its per-shard seq
+cut**; where you cut is arbitrary; and with **no** snapshot you simply cut at seq 0 and
+replay the whole log (the `REFERENCE` path). jovelog's S3 backup is *log-only* — the
+snapshot is a separate artifact (a consumer checkpoint / a state-machine snapshot / a
+DB export) that records the per-shard seq it's consistent at. The one correctness rule:
+the checkpoint's `cursor` must exactly match the state it stores (else double-apply or gaps).
+
 ## Why it works (and the one caveat)
 
 Per-shard order is all a per-user (per-shard) state machine needs, so 128 shards replay
