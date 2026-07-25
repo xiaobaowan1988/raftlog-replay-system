@@ -64,6 +64,42 @@ durable you back that up to object storage — the demo tars the log+snapshot an
 uploads it to an S3 bucket (see the repo's `flink-pipeline-tests` for the same
 local S3 mock). Recovery from S3 = restore those recordings, then replay.
 
+## Can FLINK compute the terminal state from the Aeron raftlog + S3 init?
+
+Yes — and bit-identically to Aeron's own reconstruction. `run-flink-replay.sh`
+wires it end to end (reusing the Flink + S3 mock from `../flink-pipeline-tests`):
+
+```
+Aeron cluster ──▶ raftlog.jsonl        {"pos":928,"op":"I","key":"a"} ...
+              ──▶ initial-state.json   {"snapshotPosition":512,"state":{"a":2,"b":1}}
+       both ──▶ S3
+Flink (flink/RaftlogReplayJob.java):
+   read S3 init {a:2,b:1}@pos=512  +  read raftlog from S3
+   replay only entries with pos > 512, apply in raft order (parallelism=1)
+   -> terminal {a:3,b:2,c:1}  ->  write to S3
+```
+
+Verified cross-check:
+
+```
+Aeron cluster recovered (its own replay): a=3 b=2 c=1  sha=550df8a78e3a
+Flink computed from raftlog + S3 init    : a=3 b=2 c=1  sha=550df8a78e3a   ← identical
+```
+
+Because Flink can't natively parse the raw Aeron cluster log recording (SBE-encoded,
+mixes consensus events with app messages), the bridge is an Aeron `ClusteredService`
+(`ExportingCounterService`) — the canonical decoder — that writes each committed
+command with its `Header.position()` (the raft log position). Flink then consumes
+that from S3. `run-flink-replay.sh` runs the whole thing.
+
+**Exact match requires** the same three conditions below, plus: Flink applies in the
+raft total order (parallelism=1 for global state, or an order-preserving `keyBy` for a
+key-partitioned RSM), replays from exactly the snapshot's log position, and
+re-implements the apply logic identically. For a commutative RSM like this counter,
+order doesn't affect the result; for a non-commutative RSM it does. And note: if you
+only want the *authoritative* terminal state, Aeron's own replay is canonical —
+Flink shines for *derived* views/analytics/backfills over the same log + snapshot.
+
 ## When it's exact vs only an estimate
 
 Exact reconstruction requires:
