@@ -122,6 +122,31 @@ So the answer:
   from **computed-state correctness** (needs the oracle). Verifying the log is faithful does
   not verify the fold logic.
 
+## Comparing replay state vs production state (`run-reconcile.sh`)
+
+The hard part is **aligning the cut**: production moves, so it must tell you *which
+per-shard `seq`* a given state reflects. Sharding makes this easy — compare **per
+shard at its own seq**, no global barrier.
+
+Pattern: production publishes a rolling per-shard digest `{shard, seq, stateRoot}`
+(ideally into jovelog itself). The reconciler folds the replay and, at each such
+`(shard, seq)`, compares its own root — continuous, per-shard, and it **localizes the
+first divergence**.
+
+```
+SCENARIO 1  replay == production          -> shard 5/42/109 OK (5/5) ; ALL SHARDS MATCH
+SCENARIO 2  corrupt shard 42 seq 14       -> shard 42 MISMATCH first at seq=16 (3/5) ;
+                                             shards 5 & 109 stay OK  (localized, independent)
+SCENARIO 3  replay logic drift (wrong fold) -> every shard MISMATCH from its first checkpoint
+```
+
+Comparison mechanics: compare **canonical-serialized hashes**, not raw dumps
+(protobuf is not canonical by default — sort maps / hash logical fields on both
+sides). Use a **per-shard then per-key Merkle** to localize which user diverged
+without dumping everything. If production can't expose state at a seq, compare the
+**effect stream** instead (same apply ⇒ same output events, keyed by `(shard,seq)`).
+This is the design's 双跑 acceptance gate: all-green for a sustained window → cut over.
+
 ## Why it works (and the one caveat)
 
 Per-shard order is all a per-user (per-shard) state machine needs, so 128 shards replay
