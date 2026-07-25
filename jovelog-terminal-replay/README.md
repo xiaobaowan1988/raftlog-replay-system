@@ -89,6 +89,39 @@ snapshot is a separate artifact (a consumer checkpoint / a state-machine snapsho
 DB export) that records the per-shard seq it's consistent at. The one correctness rule:
 the checkpoint's `cursor` must exactly match the state it stores (else double-apply or gaps).
 
+## How do I know it's correct — must I compare to production? (`run-verify.sh`)
+
+Split "correct" into two:
+
+- **Input / completeness / determinism** → caught by internal invariants, **no oracle needed**.
+- **Apply-logic / semantics** → invisible to every internal check; needs an **oracle**.
+
+`run-verify.sh` shows three scenarios on the same log:
+
+```
+SCENARIO 1  complete + correct        -> internal checks pass AND sha == reference     (correct)
+SCENARIO 2  hole (shard 42 -seq 14)   -> COMPLETENESS-CHECK FAILED: REPLAY_INCOMPLETE  (caught free)
+SCENARIO 3  wrong fold constant       -> completeness OK, dedup OK, parallelism-invariant (all GREEN)
+                                         but sha=d68d22a73ab3b99b != reference 102de9c8bdf50bf2
+                                         -> only the oracle catches logic drift
+```
+
+So the answer:
+
+- The `seq` strict-**+1** check tells you the **input is complete** — a gap throws
+  `REPLAY_INCOMPLETE` and you know it's wrong without touching production. `(shard,seq)`
+  dedup + parallelism-invariance similarly guard duplication and non-determinism.
+- Those checks **cannot** tell you your `apply` matches production semantics — a wrong
+  fold passes them all. For that you need an **oracle**, cheapest-to-strongest:
+  1. **Reuse the production apply code** (don't reimplement) — then logic can't drift by
+     construction, and correctness reduces to the completeness check above.
+  2. **Dual-run vs production** (the design's 双跑 acceptance gate) / a **golden** derived
+     from it: compare state hashes at per-shard `(shard, seq)` cuts (no global barrier —
+     shards are independent).
+- Distinguish **backup fidelity** (is S3 == the log? — cheap, compare records by `(shard,seq)`)
+  from **computed-state correctness** (needs the oracle). Verifying the log is faithful does
+  not verify the fold logic.
+
 ## Why it works (and the one caveat)
 
 Per-shard order is all a per-user (per-shard) state machine needs, so 128 shards replay

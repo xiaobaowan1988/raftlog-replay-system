@@ -24,8 +24,13 @@ public final class BinGen {
 
     static long value(int shard, long seq) { return seq * 2_654_435_761L + shard * 40_503L; }
 
+    static int dropShard = -1; static long dropSeq = -1;   // punch a hole (gap) for the verification demo
+
     public static void main(String[] args) throws Exception {
         Path out = Path.of(args[0]);
+        if (args.length > 1 && !args[1].isEmpty()) {        // optional "shard:seq" to omit
+            String[] d = args[1].split(":"); dropShard = Integer.parseInt(d[0]); dropSeq = Long.parseLong(d[1]);
+        }
         int[] shards = {5, 42, 109};
         int n = 20;                                  // seq 1..20 per shard
         Map<Integer, Long> startSeq = Map.of(5, 8L, 42, 5L, 109, 12L);
@@ -74,6 +79,7 @@ public final class BinGen {
         try (DataOutputStream o = new DataOutputStream(new FileOutputStream(file.toFile()))) {
             o.writeInt(MAGIC);
             for (long seq = from; seq <= to; seq++) {
+                if (shard == dropShard && seq == dropSeq) continue;   // punch a hole (gap)
                 writeRec(o, shard, seq);
                 if (seq == dupSeq) writeRec(o, shard, seq);   // duplicate (same content) -> reader must dedup
             }
