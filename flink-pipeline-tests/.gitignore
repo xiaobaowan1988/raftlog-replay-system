@@ -1,0 +1,5 @@
+# downloaded tarballs, extracted runtimes, S3 mock data, built jars, logs
+.work/
+*.jar
+*.tgz
+*.log
